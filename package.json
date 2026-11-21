@@ -1,0 +1,19 @@
+{
+  "name": "doc-scanner",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "prep": "node prep.js",
+    "setup": "npm run prep && npx cap add android && node perm.js && npx cap sync android",
+    "sync": "npm run prep && npx cap sync android",
+    "open": "npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/cli": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/filesystem": "^7.0.0",
+    "@capacitor/share": "^7.0.0",
+    "jspdf": "2.5.1"
+  }
+}
