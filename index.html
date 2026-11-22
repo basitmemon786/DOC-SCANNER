@@ -47,10 +47,9 @@ canvas{max-width:100%;max-height:100%;display:block}
   </div>
   <div id="list"></div>
   <div id="act" style="display:none">
-    <div class="set">
-      <input id="nm" value="scan" aria-label="File name">
-      <select id="sz" aria-label="Page size"><option value="a4">A4 page</option><option value="fit">Image ke size ka</option></select>
-    </div>
+    <div class="set"><input id="nm" value="scan" aria-label="File name"><select id="sz" aria-label="Page layout"><option value="a4">A4 page</option><option value="fit">Image size</option><option value="id">ID card (2 = 1 A4)</option></select></div>
+    <div class="set"><select id="ql" aria-label="Quality"><option value="1">Quality: High</option><option value=".7" selected>Quality: Normal</option><option value=".45">Quality: Small</option></select><input id="pw" placeholder="PDF password (optional)" aria-label="PDF password"></div>
+    <div class="row" style="margin-bottom:10px"><button class="btn" id="bImg">🖼️ Gallery save</button><button class="btn" id="bShr">📤 Photos share</button></div>
     <div class="row"><button class="btn p" id="bPdf">⬇️ PDF banao</button><button class="btn" id="bClr">Sab hatao</button></div>
   </div>
 </div>
@@ -218,33 +217,62 @@ const idb=()=>new Promise((ok,no)=>{try{const r=indexedDB.open('scan',1);r.onupg
 async function save(){try{const db=await idb();db.transaction('k','readwrite').objectStore('k').put(pages.map(({jpg,thumb,w,h,baseJpg,crop,f,b,c})=>({jpg,thumb,w,h,baseJpg,crop,f,b,c})),'pages')}catch(e){}}
 async function restore(){try{const db=await idb(),r=db.transaction('k').objectStore('k').get('pages');r.onsuccess=()=>{if(r.result&&r.result.length){pages=r.result;renderList()}}}catch(e){}}
 
-/* ---- PDF ---- */
+/* ---- export ---- */
+const img=src=>new Promise((ok,no)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=no;i.src=src});
+const nm=()=>$('nm').value.trim().replace(/[\\/:*?"<>|]/g,'_')||'scan';
+const P=()=>window.Capacitor&&Capacitor.Plugins;
+const b64of=blob=>new Promise(r=>{const f=new FileReader();f.onload=()=>r(f.result.split(',')[1]);f.readAsDataURL(blob)});
+async function wr(path,data){const o={path,data,directory:'EXTERNAL_STORAGE',recursive:true},F=P().Filesystem;
+  try{await F.writeFile(o)}catch(e){try{await F.requestPermissions()}catch(_){}await F.writeFile(o)}}
+async function jpgs(){
+  const q=+$('ql').value;if(q>=1)return pages;const out=[],sc=q<.5?.6:.8;
+  for(const p of pages){const i=await img(p.jpg),c=mk(Math.round(p.w*sc),Math.round(p.h*sc));c.getContext('2d').drawImage(i,0,0,c.width,c.height);out.push({jpg:c.toDataURL('image/jpeg',q),w:c.width,h:c.height})}
+  return out;
+}
+async function makePdf(){
+  const L=await jpgs(),{jsPDF}=window.jspdf,mode=$('sz').value,pwd=$('pw').value.trim(),opt={unit:'mm'};let doc=null;
+  if(pwd)opt.encryption={userPassword:pwd,ownerPassword:pwd,userPermissions:['print']};
+  const add=(w,h)=>{const o=w>h?'l':'p';if(!doc)doc=new jsPDF({...opt,orientation:o,format:[w,h]});else doc.addPage([w,h],o)};
+  if(mode==='id'){
+    for(let i=0;i<L.length;i+=2){add(210,297);
+      [L[i],L[i+1]].forEach((p,k)=>{if(!p)return;const s=Math.min(170/p.w,120/p.h),w=p.w*s,h=p.h*s;doc.addImage(p.jpg,'JPEG',(210-w)/2,20+k*140+(120-h)/2,w,h)})}
+  }else for(const p of L){
+    const a=mode==='a4',pw=a?(p.w>p.h?297:210):210,ph=a?(p.w>p.h?210:297):210*p.h/p.w,s=Math.min(pw/p.w,ph/p.h);
+    add(pw,ph);doc.addImage(p.jpg,'JPEG',(pw-p.w*s)/2,(ph-p.h*s)/2,p.w*s,p.h*s);
+  }
+  return doc.output('blob');
+}
 async function savePdf(blob,name){
-  const P=window.Capacitor&&Capacitor.Plugins;
-  if(P&&P.Filesystem&&P.Share){
-    const b64=await new Promise(r=>{const f=new FileReader();f.onload=()=>r(f.result.split(',')[1]);f.readAsDataURL(blob)});
-    const w=await P.Filesystem.writeFile({path:name,data:b64,directory:'CACHE'});
-    try{await P.Share.share({title:name,url:w.uri,dialogTitle:'PDF save / share karo'})}catch(e){}return;
+  const C=P();
+  if(C&&C.Filesystem){
+    const b=await b64of(blob);let ok=false;
+    try{await wr('Documents/DocScanner/'+name,b);ok=true}catch(e){}
+    if(C.Share){const w=await C.Filesystem.writeFile({path:name,data:b,directory:'CACHE'});toast(ok?'Documents/DocScanner mein save ✓':'Share menu se save karo');try{await C.Share.share({title:name,url:w.uri})}catch(e){}}
+    else toast(ok?'Documents/DocScanner mein save ✓':'Save nahi hui');
+    return;
   }
   let dl=null;try{dl=window.claude&&await claude.use('downloads')}catch(e){}
-  if(dl){await dl.save({filename:name,data:blob});toast('PDF save ho gayi ✓')}
-  else{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();toast('PDF save ho gayi ✓')}
+  if(dl)await dl.save({filename:name,data:blob});else{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click()}
+  toast('PDF save ho gayi ✓');
 }
-$('bPdf').onclick=async()=>{
-  if(!pages.length)return;if(!window.jspdf){toast('PDF library load nahi hui');return}
-  const btn=$('bPdf');btn.disabled=true;btn.textContent='Ban raha hai…';
-  try{
-    const{jsPDF}=window.jspdf,a4=$('sz').value==='a4';let doc=null;
-    for(const p of pages){
-      const w=p.w,h=p.h,pw=a4?(w>h?297:210):210,ph=a4?(w>h?210:297):210*h/w,o=pw>ph?'l':'p',s=Math.min(pw/w,ph/h);
-      if(!doc)doc=new jsPDF({orientation:o,unit:'mm',format:[pw,ph]});else doc.addPage([pw,ph],o);
-      doc.addImage(p.jpg,'JPEG',(pw-w*s)/2,(ph-h*s)/2,w*s,h*s);
-    }
-    const nm=($('nm').value.trim().replace(/[\\/:*?"<>|]/g,'_')||'scan')+'.pdf';
-    await savePdf(doc.output('blob'),nm);
-  }catch(e){if(!e||e.code!=='declined')toast('PDF nahi ban payi: '+((e&&e.message)||e))}
-  btn.disabled=false;btn.textContent='⬇️ PDF banao';
-};
+async function saveImages(){
+  const L=await jpgs(),C=P(),st=Date.now();
+  for(let i=0;i<L.length;i++){const name='scan-'+st+'-'+(i+1)+'.jpg';
+    if(C&&C.Filesystem)await wr('Pictures/DocScanner/'+name,L[i].jpg.split(',')[1]);
+    else{const a=document.createElement('a');a.href=L[i].jpg;a.download=name;a.click()}}
+  toast(L.length+' photo save ✓ (Pictures/DocScanner)');
+}
+async function shareImgs(){
+  const C=P();if(!(C&&C.Share&&C.Filesystem)){toast('Share sirf app mein chalta hai');return}
+  const L=await jpgs(),fl=[];
+  for(let i=0;i<L.length;i++)fl.push((await C.Filesystem.writeFile({path:nm()+'-'+(i+1)+'.jpg',data:L[i].jpg.split(',')[1],directory:'CACHE'})).uri);
+  try{await C.Share.share({files:fl})}catch(e){}
+}
+const busy=async(b,fn)=>{if(!pages.length)return;const t=b.textContent;b.disabled=true;
+  try{await fn()}catch(e){if(!e||e.code!=='declined')toast('Error: '+((e&&e.message)||e))}b.disabled=false;b.textContent=t};
+$('bPdf').onclick=()=>busy($('bPdf'),async()=>{if(!window.jspdf){toast('PDF library load nahi hui');return}$('bPdf').textContent='Ban raha hai…';await savePdf(await makePdf(),nm()+'.pdf')});
+$('bImg').onclick=()=>busy($('bImg'),saveImages);
+$('bShr').onclick=()=>busy($('bShr'),shareImgs);
 renderList();restore();
 </script>
 </body>
